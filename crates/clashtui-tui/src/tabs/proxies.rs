@@ -3,7 +3,7 @@
 //! 左栏组列表（保序），右栏当前组的节点。`←/→` 切换聚焦栏，`↑/↓` 移动，
 //! `Enter` 选节点（仅 Selector 组），`t` 测当前节点，`T` 测整组，`u` 解除固定。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
@@ -72,6 +72,45 @@ impl ProxiesTab {
         self.current_nodes().get(self.node_list.selected).cloned()
     }
 
+    fn restore_selection_after_refresh(
+        &mut self,
+        previous_group: Option<String>,
+        previous_node: Option<String>,
+    ) {
+        self.group_list
+            .set_len_and_select_by(self.groups.len(), &self.groups, |group| {
+                previous_group.as_deref() == Some(group.name.as_str())
+            });
+
+        let nodes = self.current_nodes();
+        let preferred_node = previous_node
+            .or_else(|| self.current_group().and_then(|group| group.now.clone()))
+            .unwrap_or_default();
+        self.node_list
+            .set_len_and_select_value(nodes.len(), &nodes, &preferred_node);
+    }
+
+    fn groups_in_stable_order(&self, incoming: &[Proxy]) -> Vec<Proxy> {
+        if self.groups.is_empty() {
+            return incoming.to_vec();
+        }
+
+        let mut used = HashSet::new();
+        let mut ordered = Vec::with_capacity(incoming.len());
+        for old_group in &self.groups {
+            if let Some(group) = incoming.iter().find(|group| group.name == old_group.name) {
+                used.insert(group.name.clone());
+                ordered.push(group.clone());
+            }
+        }
+        for group in incoming {
+            if used.insert(group.name.clone()) {
+                ordered.push(group.clone());
+            }
+        }
+        ordered
+    }
+
     /// 某节点的延迟（优先临时结果，其次详情历史）。
     fn node_delay(&self, name: &str) -> Delay {
         if let Some(d) = self.delays.get(name) {
@@ -81,6 +120,51 @@ impl ProxiesTab {
             .get(name)
             .map(|p| p.latest_delay())
             .unwrap_or(Delay(0))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn group(name: &str, now: &str) -> Proxy {
+        Proxy {
+            name: name.to_string(),
+            kind: "Selector".to_string(),
+            all: vec!["A".to_string(), "B".to_string()],
+            now: Some(now.to_string()),
+            history: Vec::new(),
+            udp: false,
+            test_url: None,
+            expected_status: None,
+        }
+    }
+
+    #[test]
+    fn refresh_keeps_group_order_and_selection_by_name() {
+        let mut tab = ProxiesTab::new(Theme::default(), "http://127.0.0.1:9090".into());
+        tab.groups = vec![group("Group A", "A"), group("Group B", "A")];
+        tab.group_list = SelectableList::new(2);
+        tab.group_list.selected = 1;
+        tab.node_list = SelectableList::new(2);
+        tab.node_list.selected = 1;
+
+        tab.apply_event(&AppEvent::ProxiesLoaded {
+            groups: vec![
+                group("Group B", "B"),
+                group("Group A", "A"),
+                group("Group C", "A"),
+            ],
+            all: HashMap::new(),
+        });
+
+        let names: Vec<_> = tab.groups.iter().map(|group| group.name.as_str()).collect();
+        assert_eq!(names, vec!["Group A", "Group B", "Group C"]);
+        assert_eq!(
+            tab.current_group().map(|group| group.name.as_str()),
+            Some("Group B")
+        );
+        assert_eq!(tab.selected_node().as_deref(), Some("B"));
     }
 }
 
@@ -164,10 +248,11 @@ impl Component for ProxiesTab {
     fn apply_event(&mut self, event: &AppEvent) -> Vec<Effect> {
         match event {
             AppEvent::ProxiesLoaded { groups, all } => {
-                self.groups = groups.clone();
+                let previous_group = self.current_group().map(|group| group.name.clone());
+                let previous_node = self.selected_node();
+                self.groups = self.groups_in_stable_order(groups);
                 self.all = all.clone();
-                self.group_list.set_len(self.groups.len());
-                self.node_list.set_len(self.current_nodes().len());
+                self.restore_selection_after_refresh(previous_group, previous_node);
             }
             AppEvent::DelayResult { node, delay } => {
                 self.delays.insert(node.clone(), *delay);

@@ -23,6 +23,25 @@ impl SelectableList {
         if self.selected >= len {
             self.selected = len.saturating_sub(1);
         }
+        if self.offset >= len {
+            self.offset = len.saturating_sub(1);
+        }
+    }
+
+    /// 更新长度，并按元素谓词恢复选中项。找不到时只夹紧原 index。
+    pub fn set_len_and_select_by<T, F>(&mut self, len: usize, items: &[T], mut pred: F)
+    where
+        F: FnMut(&T) -> bool,
+    {
+        self.set_len(len);
+        if let Some(index) = items.iter().position(|item| pred(item)) {
+            self.selected = index;
+        }
+    }
+
+    /// 更新长度，并按字符串值恢复选中项。找不到时只夹紧原 index。
+    pub fn set_len_and_select_value(&mut self, len: usize, items: &[String], value: &str) {
+        self.set_len_and_select_by(len, items, |item| item == value);
     }
 
     pub fn len(&self) -> usize {
@@ -87,8 +106,19 @@ mod tests {
     fn set_len_clamps() {
         let mut l = SelectableList::new(5);
         l.selected = 4;
+        l.offset = 4;
         l.set_len(2);
         assert_eq!(l.selected, 1);
+        assert_eq!(l.offset, 1);
+    }
+
+    #[test]
+    fn set_len_and_select_by_prefers_identity() {
+        let mut l = SelectableList::new(3);
+        l.selected = 0;
+        let items = vec!["A".to_string(), "B".to_string(), "C".to_string()];
+        l.set_len_and_select_value(items.len(), &items, "C");
+        assert_eq!(l.selected, 2);
     }
 
     #[test]
