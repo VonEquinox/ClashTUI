@@ -6,6 +6,7 @@ use crossterm::event::KeyEvent;
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Direction, Layout, Rect},
+    style::Style,
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Sparkline, Widget, Wrap},
 };
@@ -81,7 +82,7 @@ impl StatusTab {
     }
 
     fn apply_proxies(&mut self, groups: &[Proxy], all: &HashMap<String, Proxy>) {
-        let group = preferred_group(groups);
+        let group = preferred_group(groups, all);
         self.current_group = group.map(|group| group.name.clone());
         let node = group.and_then(|group| resolve_selected_node(group, all));
         self.current_node = node.as_ref().map(|node| node.name.clone());
@@ -191,77 +192,72 @@ impl Component for StatusTab {
         let delay = self
             .current_node_delay
             .map(|delay| delay.display())
-            .unwrap_or_else(|| "-".to_string());
+            .unwrap_or_else(|| "未测速".to_string());
 
-        let rows = vec![
-            row(&self.theme, "内核", &self.status.label(), status_style),
-            row(&self.theme, "版本", &ver, self.theme.fg_style()),
-            row(&self.theme, "模式", self.mode_str(), self.theme.fg_style()),
-            row(&self.theme, "端口", &ports, self.theme.fg_style()),
-            row(&self.theme, "TUN", tun, self.theme.fg_style()),
-            row(
-                &self.theme,
+        let left_rows = vec![
+            info_row("内核", self.status.label(), status_style),
+            info_row("版本", ver, self.theme.fg_style()),
+            info_row("模式", self.mode_str(), self.theme.fg_style()),
+            info_row("端口", ports, self.theme.fg_style()),
+            info_row("TUN", tun, self.theme.fg_style()),
+            info_row(
                 "当前配置",
                 self.current_profile.as_deref().unwrap_or("-"),
                 self.theme.fg_style(),
             ),
-            row(
-                &self.theme,
+        ];
+        let right_rows = vec![
+            info_row(
                 "代理组",
                 self.current_group.as_deref().unwrap_or("-"),
                 self.theme.fg_style(),
             ),
-            row(
-                &self.theme,
+            info_row(
                 "节点名",
                 self.current_node.as_deref().unwrap_or("-"),
                 self.theme.fg_style(),
             ),
-            row(
-                &self.theme,
+            info_row(
                 "节点类型",
                 self.current_node_kind.as_deref().unwrap_or("-"),
                 self.theme.fg_style(),
             ),
-            row(&self.theme, "节点延迟", &delay, self.theme.fg_style()),
-            row(
-                &self.theme,
+            info_row("节点延迟", delay, self.theme.fg_style()),
+            info_row(
                 "流量",
-                &format!(
+                format!(
                     "↑ {}/s  ↓ {}/s",
                     human_bytes(self.traffic.up),
                     human_bytes(self.traffic.down)
                 ),
                 self.theme.fg_style(),
             ),
-            row(
-                &self.theme,
+            info_row(
                 "内存",
-                &human_bytes(self.memory.inuse),
+                human_bytes(self.memory.inuse),
                 self.theme.fg_style(),
             ),
         ];
-
-        let mut lines = rows;
-        if !self.stream_note.is_empty() {
-            lines.push(Line::from(Span::styled(
-                format!("  {}", self.stream_note),
-                self.theme.tab_inactive(),
-            )));
-        }
+        let info_rows =
+            left_rows.len().max(right_rows.len()) as u16 + u16::from(!self.stream_note.is_empty());
 
         let sections = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(lines.len() as u16),
+                Constraint::Length(info_rows),
                 Constraint::Min(3),
                 Constraint::Min(3),
             ])
             .split(inner);
 
-        Paragraph::new(lines)
-            .wrap(Wrap { trim: false })
-            .render(sections[0], buf);
+        render_info_grid(
+            sections[0],
+            buf,
+            &self.theme,
+            &left_rows,
+            &right_rows,
+            self.stream_note.as_str(),
+        );
 
         let up: Vec<u64> = self.traffic_up.iter().copied().collect();
         let down: Vec<u64> = self.traffic_down.iter().copied().collect();
@@ -292,25 +288,34 @@ impl Component for StatusTab {
     }
 }
 
-fn preferred_group(groups: &[Proxy]) -> Option<&Proxy> {
-    const PREFERRED_NAMES: [&str; 7] = [
-        "GLOBAL",
-        "Global",
-        "PROXY",
-        "Proxy",
-        "代理",
-        "节点选择",
-        "🚀 节点选择",
-    ];
+fn preferred_group<'a>(groups: &'a [Proxy], all: &HashMap<String, Proxy>) -> Option<&'a Proxy> {
+    const PREFERRED_NAMES: [&str; 5] = ["节点选择", "🚀 节点选择", "PROXY", "Proxy", "代理"];
     for name in PREFERRED_NAMES {
         if let Some(group) = groups
             .iter()
-            .find(|group| group.name == name && group.now.is_some())
+            .find(|group| group.name == name && resolves_to_real_node(group, all))
         {
             return Some(group);
         }
     }
-    groups.iter().find(|group| group.now.is_some())
+    groups
+        .iter()
+        .find(|group| {
+            !group.name.eq_ignore_ascii_case("GLOBAL")
+                && group.is_selector()
+                && resolves_to_real_node(group, all)
+        })
+        .or_else(|| {
+            groups.iter().find(|group| {
+                !group.name.eq_ignore_ascii_case("GLOBAL") && resolves_to_real_node(group, all)
+            })
+        })
+        .or_else(|| {
+            groups
+                .iter()
+                .find(|group| group.name.eq_ignore_ascii_case("GLOBAL") && group.now.is_some())
+        })
+        .or_else(|| groups.iter().find(|group| group.now.is_some()))
 }
 
 struct SelectedNode {
@@ -328,7 +333,7 @@ fn resolve_selected_node(group: &Proxy, all: &HashMap<String, Proxy>) -> Option<
             return Some(SelectedNode {
                 name: name.to_string(),
                 kind: proxy.map(|proxy| proxy.kind.clone()),
-                delay: proxy.map(|proxy| proxy.latest_delay()),
+                delay: proxy.and_then(latest_known_delay),
             });
         }
 
@@ -341,14 +346,14 @@ fn resolve_selected_node(group: &Proxy, all: &HashMap<String, Proxy>) -> Option<
                 return Some(SelectedNode {
                     name: proxy.name.clone(),
                     kind: Some(proxy.kind.clone()),
-                    delay: Some(proxy.latest_delay()),
+                    delay: latest_known_delay(proxy),
                 });
             }
             Some(proxy) => {
                 return Some(SelectedNode {
                     name: proxy.name.clone(),
                     kind: Some(proxy.kind.clone()),
-                    delay: Some(proxy.latest_delay()),
+                    delay: latest_known_delay(proxy),
                 });
             }
             None => {
@@ -362,16 +367,94 @@ fn resolve_selected_node(group: &Proxy, all: &HashMap<String, Proxy>) -> Option<
     }
 }
 
-fn row(
+fn latest_known_delay(proxy: &Proxy) -> Option<Delay> {
+    proxy.history.last().map(|history| Delay(history.delay))
+}
+
+fn resolves_to_real_node(group: &Proxy, all: &HashMap<String, Proxy>) -> bool {
+    resolve_selected_node(group, all)
+        .as_ref()
+        .is_some_and(|node| !node.is_builtin())
+}
+
+impl SelectedNode {
+    fn is_builtin(&self) -> bool {
+        let upper_name = self.name.to_ascii_uppercase();
+        if matches!(
+            upper_name.as_str(),
+            "DIRECT" | "REJECT" | "REJECT-DROP" | "PASS"
+        ) {
+            return true;
+        }
+
+        self.kind
+            .as_deref()
+            .is_some_and(|kind| matches!(kind, "Direct" | "Reject" | "Pass"))
+    }
+}
+
+struct InfoRow {
+    label: &'static str,
+    value: String,
+    value_style: Style,
+}
+
+fn info_row(label: &'static str, value: impl Into<String>, value_style: Style) -> InfoRow {
+    InfoRow {
+        label,
+        value: value.into(),
+        value_style,
+    }
+}
+
+fn render_info_grid(
+    area: Rect,
+    buf: &mut Buffer,
     theme: &Theme,
-    label: &str,
-    value: &str,
-    value_style: ratatui::style::Style,
-) -> Line<'static> {
-    Line::from(vec![
-        Span::styled(format!("  {label:<10}"), theme.tab_inactive()),
-        Span::styled(value.to_string(), value_style),
-    ])
+    left_rows: &[InfoRow],
+    right_rows: &[InfoRow],
+    stream_note: &str,
+) {
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(area);
+    render_info_column(columns[0], buf, theme, left_rows);
+    render_info_column(columns[1], buf, theme, right_rows);
+
+    if !stream_note.is_empty() {
+        let y = area.y + left_rows.len().max(right_rows.len()) as u16;
+        if y < area.bottom() {
+            Paragraph::new(Line::from(vec![
+                Span::styled("数据流", theme.tab_inactive()),
+                Span::raw("  "),
+                Span::styled(stream_note.to_string(), theme.tab_inactive()),
+            ]))
+            .render(Rect::new(area.x, y, area.width, 1), buf);
+        }
+    }
+}
+
+fn render_info_column(area: Rect, buf: &mut Buffer, theme: &Theme, rows: &[InfoRow]) {
+    const LABEL_WIDTH: u16 = 10;
+    for (idx, row) in rows.iter().enumerate() {
+        let y = area.y + idx as u16;
+        if y >= area.bottom() {
+            break;
+        }
+        let row_area = Rect::new(area.x, y, area.width, 1);
+        let cells = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(LABEL_WIDTH), Constraint::Min(1)])
+            .split(row_area);
+        Paragraph::new(row.label)
+            .style(theme.tab_inactive())
+            .render(cells[0], buf);
+        Paragraph::new(row.value.as_str())
+            .style(row.value_style)
+            .wrap(Wrap { trim: true })
+            .render(cells[1], buf);
+    }
 }
 
 #[cfg(test)]
@@ -383,8 +466,21 @@ mod tests {
         Proxy {
             name: name.to_string(),
             kind: "Selector".to_string(),
-            all: vec![],
+            all: now.map(|node| vec![node.to_string()]).unwrap_or_default(),
             now: now.map(str::to_string),
+            history: Vec::new(),
+            udp: false,
+            test_url: None,
+            expected_status: None,
+        }
+    }
+
+    fn builtin(name: &str, kind: &str) -> Proxy {
+        Proxy {
+            name: name.to_string(),
+            kind: kind.to_string(),
+            all: vec![],
+            now: None,
             history: Vec::new(),
             udp: false,
             test_url: None,
@@ -409,11 +505,18 @@ mod tests {
     }
 
     #[test]
-    fn preferred_group_uses_global_when_available() {
-        let groups = vec![group("节点选择", Some("A")), group("GLOBAL", Some("B"))];
+    fn preferred_group_uses_real_selector_before_global_direct() {
+        let groups = vec![
+            group("GLOBAL", Some("DIRECT")),
+            group("节点选择", Some("Node A")),
+        ];
+        let mut all = HashMap::new();
+        all.insert("DIRECT".to_string(), builtin("DIRECT", "Direct"));
+        all.insert("Node A".to_string(), node("Node A"));
+
         assert_eq!(
-            preferred_group(&groups).map(|group| group.name.as_str()),
-            Some("GLOBAL")
+            preferred_group(&groups, &all).map(|group| group.name.as_str()),
+            Some("节点选择")
         );
     }
 
@@ -446,5 +549,22 @@ mod tests {
         assert_eq!(tab.current_node.as_deref(), Some("Node A"));
         assert_eq!(tab.current_node_kind.as_deref(), Some("Shadowsocks"));
         assert_eq!(tab.current_node_delay.map(|delay| delay.0), Some(123));
+    }
+
+    #[test]
+    fn status_marks_missing_delay_as_untested() {
+        let mut node = node("Node A");
+        node.history.clear();
+
+        let mut tab = StatusTab::new(Theme::default());
+        let groups = vec![group("节点选择", Some("Node A"))];
+        let mut all = HashMap::new();
+        all.insert("Node A".to_string(), node);
+
+        tab.apply_proxies(&groups, &all);
+
+        assert_eq!(tab.current_group.as_deref(), Some("节点选择"));
+        assert_eq!(tab.current_node.as_deref(), Some("Node A"));
+        assert_eq!(tab.current_node_delay, None);
     }
 }
