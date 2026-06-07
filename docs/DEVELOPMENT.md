@@ -166,6 +166,7 @@ Linux 默认：
 | `keep_core_running` | `false` | 退出 TUI 后是否保留由 ClashTUI 启动的 mihomo 内核 |
 | `test_url` | `http://www.gstatic.com/generate_204` | 节点测速 URL |
 | `test_timeout_ms` | `5000` | 节点测速超时 |
+| `group_delay_concurrency` | `0` | 组测速并发数：`0` 使用 mihomo 整组测速接口，`1` 逐个，`2+` 小批量并发 |
 | `log_level` | `info` | 预留/配置展示用日志级别 |
 | `manual_network_service` | 空 | macOS 手动指定网络服务名 |
 | `system_proxy` | 见下 | 系统代理配置 |

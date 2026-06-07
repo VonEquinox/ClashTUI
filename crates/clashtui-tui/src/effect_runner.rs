@@ -6,7 +6,8 @@
 
 use std::{collections::HashMap, time::Duration};
 
-use clashtui_core_api::{Mode, StreamKind, StreamMsg};
+use clashtui_core_api::{Delay, MihomoClient, Mode, StreamKind, StreamMsg};
+use futures_util::stream::{FuturesUnordered, StreamExt};
 
 use crate::app::App;
 use crate::context::AppContext;
@@ -89,6 +90,10 @@ pub fn apply(app: &mut App, effect: Effect) -> bool {
         }
         Effect::SetKeepCoreRunning(enable) => {
             spawn_set_keep_core_running(app.ctx(), enable);
+            false
+        }
+        Effect::SetGroupDelayConcurrency(value) => {
+            spawn_set_group_delay_concurrency(app.ctx(), value);
             false
         }
 
@@ -488,6 +493,29 @@ fn spawn_set_keep_core_running(ctx: AppContext, enable: bool) {
     });
 }
 
+fn spawn_set_group_delay_concurrency(ctx: AppContext, value: usize) {
+    tokio::spawn(async move {
+        let task_key = "set_group_delay_concurrency";
+        let mut app_config = load_config_snapshot(&ctx);
+        app_config.group_delay_concurrency = value;
+        match app_config.save(&ctx.paths.config_file()) {
+            Ok(()) => {
+                ctx.emit(AppEvent::AppConfigLoaded(Box::new(load_config_snapshot(
+                    &ctx,
+                ))));
+                let label = if value == 0 {
+                    "整组一次性".to_string()
+                } else {
+                    format!("{value} 并发")
+                };
+                ctx.emit(AppEvent::Toast(format!("组测速方式已设置为 {label}")));
+            }
+            Err(e) => ctx.emit(AppEvent::Error(format!("保存组测速并发设置失败: {e}"))),
+        }
+        finish_task(&ctx, task_key);
+    });
+}
+
 fn spawn_select_node(ctx: AppContext, group: String, node: String) {
     tokio::spawn(async move {
         let task_key = format!("select_node:{group}");
@@ -552,24 +580,103 @@ fn spawn_test_node(ctx: AppContext, node: String) {
     });
 }
 
+async fn test_node_delay(
+    client: MihomoClient,
+    node: String,
+    url: String,
+    timeout: u32,
+) -> (String, Option<Delay>) {
+    let delay = client.proxy_delay(&node, &url, timeout).await.ok();
+    (node, delay)
+}
+
 fn spawn_test_group(ctx: AppContext, group: String) {
     let url = ctx.config.test_url.clone();
     let timeout = ctx.config.test_timeout_ms;
+    let concurrency = load_config_snapshot(&ctx).group_delay_concurrency.min(64);
     tokio::spawn(async move {
         let task_key = format!("test_group:{group}");
         let progress_id = "test_group";
-        emit_progress(&ctx, progress_id, format!("整组测速 {group}"), 0, Some(1));
-        match ctx.client.group_delay(&group, &url, timeout).await {
-            Ok(map) => {
-                emit_progress(&ctx, progress_id, format!("整组测速 {group}"), 1, Some(1));
-                finish_progress(&ctx, progress_id);
-                ctx.emit(AppEvent::GroupDelayResult(map));
+        if concurrency == 0 {
+            emit_progress(&ctx, progress_id, format!("整组测速 {group}"), 0, Some(1));
+            match ctx.client.group_delay(&group, &url, timeout).await {
+                Ok(map) => {
+                    emit_progress(&ctx, progress_id, format!("整组测速 {group}"), 1, Some(1));
+                    finish_progress(&ctx, progress_id);
+                    ctx.emit(AppEvent::GroupDelayResult(map));
+                }
+                Err(e) => {
+                    finish_progress(&ctx, progress_id);
+                    ctx.emit(AppEvent::Error(format!("{group} 整组测速失败: {e}")));
+                }
             }
+            finish_task(&ctx, &task_key);
+            return;
+        }
+
+        let nodes = match ctx.client.groups().await {
+            Ok(groups) => groups
+                .into_iter()
+                .find(|candidate| candidate.name == group)
+                .map(|candidate| candidate.all)
+                .unwrap_or_default(),
             Err(e) => {
-                finish_progress(&ctx, progress_id);
-                ctx.emit(AppEvent::Error(format!("{group} 整组测速失败: {e}")));
+                ctx.emit(AppEvent::Error(format!("{group} 读取节点失败: {e}")));
+                finish_task(&ctx, &task_key);
+                return;
+            }
+        };
+        let total = nodes.len() as u64;
+        if total == 0 {
+            ctx.emit(AppEvent::Toast(format!("{group} 没有可测速节点")));
+            finish_task(&ctx, &task_key);
+            return;
+        }
+
+        emit_progress(
+            &ctx,
+            progress_id,
+            format!("分批测速 {group}"),
+            0,
+            Some(total),
+        );
+        let client = ctx.client.clone();
+        let mut pending = FuturesUnordered::new();
+        let mut iter = nodes.into_iter();
+        for _ in 0..concurrency {
+            let Some(node) = iter.next() else { break };
+            pending.push(test_node_delay(client.clone(), node, url.clone(), timeout));
+        }
+
+        let mut done = 0;
+        let mut results = HashMap::new();
+        while let Some((node, delay)) = pending.next().await {
+            done += 1;
+            let delay_value = delay.map(|delay| delay.0).unwrap_or(0);
+            results.insert(node.clone(), delay_value);
+            ctx.emit(AppEvent::DelayResult {
+                node,
+                delay: clashtui_core_api::Delay(delay_value),
+            });
+            emit_progress(
+                &ctx,
+                progress_id,
+                format!("分批测速 {group}"),
+                done,
+                Some(total),
+            );
+
+            if let Some(next_node) = iter.next() {
+                pending.push(test_node_delay(
+                    client.clone(),
+                    next_node,
+                    url.clone(),
+                    timeout,
+                ));
             }
         }
+        finish_progress(&ctx, progress_id);
+        ctx.emit(AppEvent::GroupDelayResult(results));
         finish_task(&ctx, &task_key);
     });
 }

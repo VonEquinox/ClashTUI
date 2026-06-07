@@ -107,6 +107,9 @@ pub struct AppConfig {
     /// 测速超时（毫秒）。
     #[serde(default = "default_test_timeout")]
     pub test_timeout_ms: u32,
+    /// 组测速并发数：0 = 使用 mihomo 整组测速接口；1 = 逐个；2+ = 小批量并发。
+    #[serde(default)]
+    pub group_delay_concurrency: usize,
     /// WS 日志级别（info/warning/error/debug/silent）。
     #[serde(default = "default_log_level")]
     pub log_level: String,
@@ -143,6 +146,7 @@ impl Default for AppConfig {
             keep_core_running: false,
             test_url: default_test_url(),
             test_timeout_ms: default_test_timeout(),
+            group_delay_concurrency: 0,
             log_level: default_log_level(),
             manual_network_service: String::new(),
             system_proxy: SystemProxyConfig::default(),
@@ -183,6 +187,7 @@ mod tests {
         assert_eq!(back.system_proxy.http_port, 7890);
         assert_eq!(back.system_proxy.socks_port, 7891);
         assert_eq!(back.system_proxy.mixed_port, 7892);
+        assert_eq!(back.group_delay_concurrency, 0);
         assert_eq!(back.auto_update.interval_hours, 24);
     }
 

@@ -26,6 +26,7 @@ enum Item {
     HttpPort,
     SocksPort,
     MixedPort,
+    GroupDelayConcurrency,
     SysProxy,
     KeepCoreRunning,
     EditMixin,
@@ -34,12 +35,13 @@ enum Item {
 }
 
 impl Item {
-    const ALL: [Item; 10] = [
+    const ALL: [Item; 11] = [
         Item::Mode,
         Item::Tun,
         Item::HttpPort,
         Item::SocksPort,
         Item::MixedPort,
+        Item::GroupDelayConcurrency,
         Item::SysProxy,
         Item::KeepCoreRunning,
         Item::EditMixin,
@@ -54,6 +56,7 @@ impl Item {
             Item::HttpPort => "HTTP 端口",
             Item::SocksPort => "SOCKS 端口",
             Item::MixedPort => "Mixed 端口",
+            Item::GroupDelayConcurrency => "组测速并发",
             Item::SysProxy => "系统代理",
             Item::KeepCoreRunning => "退出保留内核",
             Item::EditMixin => "编辑 Mixin",
@@ -71,8 +74,8 @@ pub struct SettingsTab {
     /// 已知系统代理开启状态（仅展示，真实状态由 OS 决定）。
     sysproxy_on: bool,
     controller: String,
-    editing_port: Option<Item>,
-    port_input: Prompt,
+    editing_number: Option<Item>,
+    number_input: Prompt,
 }
 
 impl SettingsTab {
@@ -84,8 +87,8 @@ impl SettingsTab {
             selected: 0,
             sysproxy_on: false,
             controller,
-            editing_port: None,
-            port_input: Prompt::new(),
+            editing_number: None,
+            number_input: Prompt::new(),
         }
     }
 
@@ -125,6 +128,10 @@ impl SettingsTab {
         self.app_config.keep_core_running
     }
 
+    fn group_delay_concurrency(&self) -> usize {
+        self.app_config.group_delay_concurrency
+    }
+
     fn activate(&mut self) -> Vec<Effect> {
         match Item::ALL[self.selected] {
             Item::Mode => {
@@ -144,6 +151,10 @@ impl SettingsTab {
                 self.start_edit_port(Item::MixedPort);
                 vec![]
             }
+            Item::GroupDelayConcurrency => {
+                self.start_edit_number(Item::GroupDelayConcurrency);
+                vec![]
+            }
             Item::SysProxy => vec![Effect::ToggleSysProxy],
             Item::KeepCoreRunning => {
                 vec![Effect::SetKeepCoreRunning(!self.keep_core_running())]
@@ -161,15 +172,27 @@ impl SettingsTab {
             Item::MixedPort => self.mixed_port(),
             _ => return,
         };
-        self.editing_port = Some(item);
-        self.port_input.set_text(&value.to_string());
+        self.start_edit_number_with_value(item, value.to_string());
+    }
+
+    fn start_edit_number(&mut self, item: Item) {
+        let value = match item {
+            Item::GroupDelayConcurrency => self.group_delay_concurrency().to_string(),
+            _ => return,
+        };
+        self.start_edit_number_with_value(item, value);
+    }
+
+    fn start_edit_number_with_value(&mut self, item: Item, value: String) {
+        self.editing_number = Some(item);
+        self.number_input.set_text(&value);
     }
 
     fn finish_edit_port(&mut self) -> Vec<Effect> {
-        let Some(item) = self.editing_port.take() else {
+        let Some(item) = self.editing_number.take() else {
             return vec![];
         };
-        let text = self.port_input.text();
+        let text = self.number_input.text();
         let Ok(port) = text.parse::<u16>() else {
             return vec![Effect::Toast("端口必须是 1-65535 的数字".into())];
         };
@@ -194,6 +217,25 @@ impl SettingsTab {
             _ => vec![],
         }
     }
+
+    fn finish_edit_group_delay_concurrency(&mut self) -> Vec<Effect> {
+        self.editing_number = None;
+        let text = self.number_input.text();
+        let Ok(value) = text.parse::<usize>() else {
+            return vec![Effect::Toast("组测速并发必须是数字".into())];
+        };
+        if value > 64 {
+            return vec![Effect::Toast("组测速并发不能超过 64".into())];
+        }
+        vec![Effect::SetGroupDelayConcurrency(value)]
+    }
+
+    fn finish_edit_number(&mut self) -> Vec<Effect> {
+        match self.editing_number {
+            Some(Item::GroupDelayConcurrency) => self.finish_edit_group_delay_concurrency(),
+            _ => self.finish_edit_port(),
+        }
+    }
 }
 
 impl Component for SettingsTab {
@@ -206,19 +248,19 @@ impl Component for SettingsTab {
     }
 
     fn capturing(&self) -> bool {
-        self.editing_port.is_some()
+        self.editing_number.is_some()
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> (Handled, Vec<Effect>) {
-        if self.editing_port.is_some() {
+        if self.editing_number.is_some() {
             match key.code {
-                KeyCode::Enter => return (Handled::Yes, self.finish_edit_port()),
+                KeyCode::Enter => return (Handled::Yes, self.finish_edit_number()),
                 KeyCode::Esc => {
-                    self.editing_port = None;
+                    self.editing_number = None;
                     return (Handled::Yes, vec![]);
                 }
                 KeyCode::Char(c) if c.is_ascii_digit() => {
-                    self.port_input.handle_key(key);
+                    self.number_input.handle_key(key);
                     return (Handled::Yes, vec![]);
                 }
                 KeyCode::Backspace
@@ -227,7 +269,7 @@ impl Component for SettingsTab {
                 | KeyCode::Right
                 | KeyCode::Home
                 | KeyCode::End => {
-                    self.port_input.handle_key(key);
+                    self.number_input.handle_key(key);
                     return (Handled::Yes, vec![]);
                 }
                 _ => return (Handled::Yes, vec![]),
@@ -256,9 +298,9 @@ impl Component for SettingsTab {
     }
 
     fn handle_paste(&mut self, text: String) -> (Handled, Vec<Effect>) {
-        if self.editing_port.is_some() {
+        if self.editing_number.is_some() {
             let digits: String = text.chars().filter(|c| c.is_ascii_digit()).collect();
-            self.port_input.insert_str(&digits);
+            self.number_input.insert_str(&digits);
             return (Handled::Yes, vec![]);
         }
         (Handled::No, vec![])
@@ -303,6 +345,16 @@ impl Component for SettingsTab {
                 Item::HttpPort => self.http_port().to_string(),
                 Item::SocksPort => self.socks_port().to_string(),
                 Item::MixedPort => self.mixed_port().to_string(),
+                Item::GroupDelayConcurrency => {
+                    let value = self.group_delay_concurrency();
+                    if value == 0 {
+                        "整组".to_string()
+                    } else if value == 1 {
+                        "逐个".to_string()
+                    } else {
+                        format!("{value} 并发")
+                    }
+                }
                 Item::SysProxy => if self.sysproxy_on { "on" } else { "off" }.into(),
                 Item::KeepCoreRunning => if self.keep_core_running() {
                     "on"
@@ -336,14 +388,14 @@ impl Component for SettingsTab {
             buf.set_line(inner.x + 1, info_y, &info, inner.width.saturating_sub(1));
         }
 
-        if self.editing_port.is_some() {
-            self.draw_port_popup(area, buf);
+        if self.editing_number.is_some() {
+            self.draw_number_popup(area, buf);
         }
     }
 
     fn footer_hints(&self) -> &str {
-        if self.editing_port.is_some() {
-            "输入端口或粘贴数字 · Enter 保存 · Esc 取消"
+        if self.editing_number.is_some() {
+            "输入数字 · Enter 保存 · Esc 取消"
         } else {
             "↑/↓ 选择 · Enter/→ 切换或执行"
         }
@@ -351,13 +403,14 @@ impl Component for SettingsTab {
 }
 
 impl SettingsTab {
-    fn draw_port_popup(&self, area: Rect, buf: &mut Buffer) {
+    fn draw_number_popup(&self, area: Rect, buf: &mut Buffer) {
         let popup = centered(52, 5, area);
         Clear.render(popup, buf);
-        let title = match self.editing_port {
+        let title = match self.editing_number {
             Some(Item::HttpPort) => " 设置 HTTP 端口 ",
             Some(Item::SocksPort) => " 设置 SOCKS 端口 ",
             Some(Item::MixedPort) => " 设置 Mixed 端口 ",
+            Some(Item::GroupDelayConcurrency) => " 设置组测速并发 ",
             _ => " 设置端口 ",
         };
         let block = Block::default()
@@ -368,9 +421,9 @@ impl SettingsTab {
         block.render(popup, buf);
         Paragraph::new(vec![
             Line::from(vec![
-                Span::styled("  端口: ", self.theme.tab_inactive()),
+                Span::styled("  数值: ", self.theme.tab_inactive()),
                 Span::styled(
-                    format!("{}_", self.port_input.text()),
+                    format!("{}_", self.number_input.text()),
                     self.theme.accent_style(),
                 ),
             ]),

@@ -209,6 +209,8 @@ pub enum Effect {
     },
     /// 设置退出 TUI 后是否保留托管内核。
     SetKeepCoreRunning(bool),
+    /// 设置组测速并发数（0 = mihomo 整组接口）。
+    SetGroupDelayConcurrency(usize),
 
     // ---- 代理 ----
     /// 选节点（组, 节点）。
@@ -282,6 +284,7 @@ impl Effect {
             Effect::ToggleTun(_) => Some("toggle_tun".into()),
             Effect::SetProxyPorts { .. } => Some("set_proxy_ports".into()),
             Effect::SetKeepCoreRunning(_) => Some("set_keep_core_running".into()),
+            Effect::SetGroupDelayConcurrency(_) => Some("set_group_delay_concurrency".into()),
             Effect::SelectNode { group, .. } => Some(format!("select_node:{group}")),
             Effect::UnfixGroup(group) => Some(format!("unfix_group:{group}")),
             Effect::TestNode(node) => Some(format!("test_node:{node}")),
