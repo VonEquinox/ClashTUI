@@ -284,8 +284,7 @@ impl Effect {
             Effect::SetGroupDelayConcurrency(_) => Some("set_group_delay_concurrency".into()),
             Effect::SelectNode { group, .. } => Some(format!("select_node:{group}")),
             Effect::UnfixGroup(group) => Some(format!("unfix_group:{group}")),
-            Effect::TestNode(node) => Some(format!("test_node:{node}")),
-            Effect::TestGroup(group) => Some(format!("test_group:{group}")),
+            Effect::TestNode(_) | Effect::TestGroup(_) => Some("proxy_delay".into()),
             Effect::AddProfile { name, .. } => Some(format!("add_profile:{name}")),
             Effect::AddProfileFromUrl(url) => Some(format!("add_profile_url:{url}")),
             Effect::SwitchProfile(name) => Some(format!("switch_profile:{name}")),
@@ -315,4 +314,23 @@ pub enum StreamId {
     Logs,
     Connections,
     Memory,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn proxy_delay_effects_share_one_inflight_key() {
+        assert_eq!(
+            Effect::TestNode("A".to_string()).inflight_key().as_deref(),
+            Some("proxy_delay")
+        );
+        assert_eq!(
+            Effect::TestGroup("Group".to_string())
+                .inflight_key()
+                .as_deref(),
+            Some("proxy_delay")
+        );
+    }
 }

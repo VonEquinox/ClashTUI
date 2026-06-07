@@ -562,7 +562,7 @@ fn spawn_test_node(ctx: AppContext, node: String) {
     let url = ctx.config.test_url.clone();
     let timeout = ctx.config.test_timeout_ms;
     tokio::spawn(async move {
-        let task_key = format!("test_node:{node}");
+        let task_key = "proxy_delay";
         let progress_id = "test_node";
         emit_progress(&ctx, progress_id, format!("测速 {node}"), 0, Some(1));
         match ctx.client.proxy_delay(&node, &url, timeout).await {
@@ -576,7 +576,7 @@ fn spawn_test_node(ctx: AppContext, node: String) {
                 ctx.emit(AppEvent::Error(format!("{node} 测速失败: {e}")));
             }
         }
-        finish_task(&ctx, &task_key);
+        finish_task(&ctx, task_key);
     });
 }
 
@@ -595,7 +595,7 @@ fn spawn_test_group(ctx: AppContext, group: String) {
     let timeout = ctx.config.test_timeout_ms;
     let concurrency = load_config_snapshot(&ctx).group_delay_concurrency.min(64);
     tokio::spawn(async move {
-        let task_key = format!("test_group:{group}");
+        let task_key = "proxy_delay";
         let progress_id = "test_group";
         if concurrency == 0 {
             emit_progress(&ctx, progress_id, format!("整组测速 {group}"), 0, Some(1));
@@ -610,7 +610,7 @@ fn spawn_test_group(ctx: AppContext, group: String) {
                     ctx.emit(AppEvent::Error(format!("{group} 整组测速失败: {e}")));
                 }
             }
-            finish_task(&ctx, &task_key);
+            finish_task(&ctx, task_key);
             return;
         }
 
@@ -622,14 +622,14 @@ fn spawn_test_group(ctx: AppContext, group: String) {
                 .unwrap_or_default(),
             Err(e) => {
                 ctx.emit(AppEvent::Error(format!("{group} 读取节点失败: {e}")));
-                finish_task(&ctx, &task_key);
+                finish_task(&ctx, task_key);
                 return;
             }
         };
         let total = nodes.len() as u64;
         if total == 0 {
             ctx.emit(AppEvent::Toast(format!("{group} 没有可测速节点")));
-            finish_task(&ctx, &task_key);
+            finish_task(&ctx, task_key);
             return;
         }
 
@@ -677,7 +677,7 @@ fn spawn_test_group(ctx: AppContext, group: String) {
         }
         finish_progress(&ctx, progress_id);
         ctx.emit(AppEvent::GroupDelayResult(results));
-        finish_task(&ctx, &task_key);
+        finish_task(&ctx, task_key);
     });
 }
 
