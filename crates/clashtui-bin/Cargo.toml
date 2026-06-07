@@ -1,0 +1,20 @@
+[package]
+name = "clashtui-bin"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "clashtui"
+path = "src/main.rs"
+
+[dependencies]
+clashtui-core-api = { workspace = true }
+clashtui-domain = { workspace = true }
+clashtui-tui = { workspace = true }
+tokio = { workspace = true }
+clap = { workspace = true }
+color-eyre = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

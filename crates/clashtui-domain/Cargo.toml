@@ -1,0 +1,38 @@
+[package]
+name = "clashtui-domain"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+default = ["yaml-ng"]
+# 保序 YAML 后端二选一（见 yaml.rs 的 Mapping 抽象）
+yaml-ng = ["dep:serde_yaml_ng"]
+yaml-noya = ["dep:noyalib"]
+
+[dependencies]
+clashtui-core-api = { workspace = true }
+tokio = { workspace = true }
+futures-util = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml_ng = { workspace = true, optional = true }
+noyalib = { workspace = true, optional = true }
+toml = { workspace = true }
+indexmap = { workspace = true }
+thiserror = { workspace = true }
+sha2 = { workspace = true }
+flate2 = { workspace = true }
+tempfile = { workspace = true }
+semver = { workspace = true }
+chrono = { workspace = true }
+directories = { workspace = true }
+tracing = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31", features = ["user", "signal"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }

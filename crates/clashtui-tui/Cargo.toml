@@ -1,0 +1,19 @@
+[package]
+name = "clashtui-tui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+clashtui-core-api = { workspace = true }
+clashtui-domain = { workspace = true }
+tokio = { workspace = true }
+futures-util = { workspace = true }
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+ratatui-macros = { workspace = true }
+color-eyre = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
