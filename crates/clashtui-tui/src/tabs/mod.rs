@@ -6,7 +6,6 @@ mod profiles;
 mod proxies;
 mod settings;
 mod status;
-mod traffic;
 
 pub use connections::ConnectionsTab;
 pub use logs::LogsTab;
@@ -14,7 +13,6 @@ pub use profiles::ProfilesTab;
 pub use proxies::ProxiesTab;
 pub use settings::SettingsTab;
 pub use status::StatusTab;
-pub use traffic::TrafficTab;
 
 use crate::component::Component;
 use crate::event::TabId;
@@ -36,7 +34,6 @@ fn build_tab(id: TabId, theme: &Theme, controller: &str) -> Box<dyn Component> {
         TabId::Proxies => Box::new(ProxiesTab::new(theme.clone(), controller.to_string())),
         TabId::Logs => Box::new(LogsTab::new(theme.clone())),
         TabId::Connections => Box::new(ConnectionsTab::new(theme.clone())),
-        TabId::Traffic => Box::new(TrafficTab::new(theme.clone())),
         TabId::Settings => Box::new(SettingsTab::new(theme.clone(), controller.to_string())),
     }
 }

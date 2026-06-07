@@ -432,7 +432,7 @@ impl App {
             Line::from(Span::styled("ClashTUI — 帮助", t.tab_active())),
             Line::from(""),
             Line::from("  ←/→ 或 Tab/Shift-Tab   切换 tab"),
-            Line::from("  1-7                      跳到对应 tab"),
+            Line::from("  1-6                      跳到对应 tab"),
             Line::from("  ↑/↓                      列表内移动"),
             Line::from("  Enter                    选择/确认"),
             Line::from("  Ctrl+R                   重启内核"),

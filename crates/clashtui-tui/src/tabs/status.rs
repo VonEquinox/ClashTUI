@@ -1,6 +1,6 @@
 //! Status tab：版本、内核状态、模式、端口、TUN、实时流量/内存。
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use crossterm::event::KeyEvent;
 use ratatui::{
@@ -10,7 +10,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Sparkline, Widget, Wrap},
 };
 
-use clashtui_core_api::{GeneralConfig, Memory, Mode, Proxy, Traffic, Version};
+use clashtui_core_api::{Delay, GeneralConfig, Memory, Mode, Proxy, Traffic, Version};
 use clashtui_domain::{AppConfig, CoreStatus};
 
 use crate::{
@@ -37,7 +37,7 @@ pub struct StatusTab {
     current_group: Option<String>,
     current_node: Option<String>,
     current_node_kind: Option<String>,
-    current_node_delay: Option<clashtui_core_api::Delay>,
+    current_node_delay: Option<Delay>,
     stream_note: String,
 }
 
@@ -83,17 +83,10 @@ impl StatusTab {
     fn apply_proxies(&mut self, groups: &[Proxy], all: &HashMap<String, Proxy>) {
         let group = preferred_group(groups);
         self.current_group = group.map(|group| group.name.clone());
-        self.current_node = group.and_then(|group| group.now.clone());
-        self.current_node_kind = self
-            .current_node
-            .as_deref()
-            .and_then(|node| all.get(node))
-            .map(|proxy| proxy.kind.clone());
-        self.current_node_delay = self
-            .current_node
-            .as_deref()
-            .and_then(|node| all.get(node))
-            .map(|proxy| proxy.latest_delay());
+        let node = group.and_then(|group| resolve_selected_node(group, all));
+        self.current_node = node.as_ref().map(|node| node.name.clone());
+        self.current_node_kind = node.as_ref().and_then(|node| node.kind.clone());
+        self.current_node_delay = node.and_then(|node| node.delay);
     }
 }
 
@@ -134,7 +127,7 @@ impl Component for StatusTab {
             }
             AppEvent::GroupDelayResult(map) => {
                 if let Some(delay) = self.current_node.as_deref().and_then(|node| map.get(node)) {
-                    self.current_node_delay = Some(clashtui_core_api::Delay(*delay));
+                    self.current_node_delay = Some(Delay(*delay));
                 }
             }
             AppEvent::WsTraffic(t) => self.push_traffic(*t),
@@ -195,20 +188,10 @@ impl Component for StatusTab {
             .map(|c| if c.tun.enable { "on" } else { "off" })
             .unwrap_or("-");
 
-        let node = self.current_node.as_deref().unwrap_or("-");
-        let node_detail = match (
-            self.current_group.as_deref(),
-            self.current_node_kind.as_deref(),
-            self.current_node_delay,
-        ) {
-            (Some(group), Some(kind), Some(delay)) => {
-                format!("{node} ({kind}, {group}, {})", delay.display())
-            }
-            (Some(group), Some(kind), None) => format!("{node} ({kind}, {group})"),
-            (Some(group), None, Some(delay)) => format!("{node} ({group}, {})", delay.display()),
-            (Some(group), None, None) => format!("{node} ({group})"),
-            _ => node.to_string(),
-        };
+        let delay = self
+            .current_node_delay
+            .map(|delay| delay.display())
+            .unwrap_or_else(|| "-".to_string());
 
         let rows = vec![
             row(&self.theme, "内核", &self.status.label(), status_style),
@@ -222,7 +205,25 @@ impl Component for StatusTab {
                 self.current_profile.as_deref().unwrap_or("-"),
                 self.theme.fg_style(),
             ),
-            row(&self.theme, "当前节点", &node_detail, self.theme.fg_style()),
+            row(
+                &self.theme,
+                "代理组",
+                self.current_group.as_deref().unwrap_or("-"),
+                self.theme.fg_style(),
+            ),
+            row(
+                &self.theme,
+                "节点名",
+                self.current_node.as_deref().unwrap_or("-"),
+                self.theme.fg_style(),
+            ),
+            row(
+                &self.theme,
+                "节点类型",
+                self.current_node_kind.as_deref().unwrap_or("-"),
+                self.theme.fg_style(),
+            ),
+            row(&self.theme, "节点延迟", &delay, self.theme.fg_style()),
             row(
                 &self.theme,
                 "流量",
@@ -312,6 +313,55 @@ fn preferred_group(groups: &[Proxy]) -> Option<&Proxy> {
     groups.iter().find(|group| group.now.is_some())
 }
 
+struct SelectedNode {
+    name: String,
+    kind: Option<String>,
+    delay: Option<Delay>,
+}
+
+fn resolve_selected_node(group: &Proxy, all: &HashMap<String, Proxy>) -> Option<SelectedNode> {
+    let mut name = group.now.as_deref()?;
+    let mut seen = HashSet::new();
+    loop {
+        let proxy = all.get(name);
+        if !seen.insert(name.to_string()) {
+            return Some(SelectedNode {
+                name: name.to_string(),
+                kind: proxy.map(|proxy| proxy.kind.clone()),
+                delay: proxy.map(|proxy| proxy.latest_delay()),
+            });
+        }
+
+        match proxy {
+            Some(proxy) if proxy.is_group() => {
+                if let Some(next) = proxy.now.as_deref() {
+                    name = next;
+                    continue;
+                }
+                return Some(SelectedNode {
+                    name: proxy.name.clone(),
+                    kind: Some(proxy.kind.clone()),
+                    delay: Some(proxy.latest_delay()),
+                });
+            }
+            Some(proxy) => {
+                return Some(SelectedNode {
+                    name: proxy.name.clone(),
+                    kind: Some(proxy.kind.clone()),
+                    delay: Some(proxy.latest_delay()),
+                });
+            }
+            None => {
+                return Some(SelectedNode {
+                    name: name.to_string(),
+                    kind: None,
+                    delay: None,
+                });
+            }
+        }
+    }
+}
+
 fn row(
     theme: &Theme,
     label: &str,
@@ -372,6 +422,22 @@ mod tests {
         let mut tab = StatusTab::new(Theme::default());
         let groups = vec![group("GLOBAL", Some("Node A"))];
         let mut all = HashMap::new();
+        all.insert("Node A".to_string(), node("Node A"));
+
+        tab.apply_proxies(&groups, &all);
+
+        assert_eq!(tab.current_group.as_deref(), Some("GLOBAL"));
+        assert_eq!(tab.current_node.as_deref(), Some("Node A"));
+        assert_eq!(tab.current_node_kind.as_deref(), Some("Shadowsocks"));
+        assert_eq!(tab.current_node_delay.map(|delay| delay.0), Some(123));
+    }
+
+    #[test]
+    fn status_resolves_nested_group_to_leaf_node() {
+        let mut tab = StatusTab::new(Theme::default());
+        let groups = vec![group("GLOBAL", Some("节点选择"))];
+        let mut all = HashMap::new();
+        all.insert("节点选择".to_string(), group("节点选择", Some("Node A")));
         all.insert("Node A".to_string(), node("Node A"));
 
         tab.apply_proxies(&groups, &all);

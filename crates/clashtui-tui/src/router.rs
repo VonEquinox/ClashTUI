@@ -8,7 +8,7 @@
 //! ```
 //!
 //! 三类普通按键的区分是关键：
-//! - **ReservedGlobal**（`?`/`q`/`Ctrl+C`/数字键 1-7）：永远归全局，即使在 tab 内，
+//! - **ReservedGlobal**（`?`/`q`/`Ctrl+C`/数字键 1-6）：永远归全局，即使在 tab 内，
 //!   避免被组件贪婪吃掉导致无法切 tab / 退出。
 //! - **ActiveTab**（方向键、Enter、Esc、动作字符 t/T/u/a/d/p…）：先交给当前组件。
 //! - **GlobalFallback**（Tab/Shift-Tab/F5/r）：tab 切换与刷新，组件不参与。
@@ -148,8 +148,8 @@ fn classify_chord(key: KeyEvent) -> Option<Chord> {
 /// 保留全局键：永远归全局，不下发给组件。
 fn classify_reserved_global(key: KeyEvent) -> Option<GlobalAction> {
     match key.code {
-        // 数字直跳 1-7
-        KeyCode::Char(c @ '1'..='7') => {
+        // 数字直跳 1-6
+        KeyCode::Char(c @ '1'..='6') => {
             let idx = (c as u8 - b'1') as usize;
             TabId::from_index(idx).map(GlobalAction::SwitchTab)
         }
@@ -280,9 +280,10 @@ mod tests {
             Routed::Global(GlobalAction::SwitchTab(TabId::Profiles))
         );
         assert_eq!(
-            route(focus(), key(KeyCode::Char('7'))),
+            route(focus(), key(KeyCode::Char('6'))),
             Routed::Global(GlobalAction::SwitchTab(TabId::Settings))
         );
+        assert_eq!(route(focus(), key(KeyCode::Char('7'))), Routed::ActiveTab);
     }
 
     #[test]
@@ -362,7 +363,7 @@ mod tests {
     #[test]
     fn from_index_bounds() {
         assert_eq!(TabId::from_index(0), Some(TabId::Status));
-        assert_eq!(TabId::from_index(6), Some(TabId::Settings));
-        assert_eq!(TabId::from_index(7), None);
+        assert_eq!(TabId::from_index(5), Some(TabId::Settings));
+        assert_eq!(TabId::from_index(6), None);
     }
 }

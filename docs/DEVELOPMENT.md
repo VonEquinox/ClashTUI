@@ -728,8 +728,7 @@ Tab 顺序由 `TabId::ORDER` 决定：
 3. `Profiles`
 4. `Connections`
 5. `Logs`
-6. `Traffic`
-7. `Settings`
+6. `Settings`
 
 ### 14.1 Status
 
@@ -738,6 +737,7 @@ Tab 顺序由 `TabId::ORDER` 决定：
 焦点行为：
 
 - `RefreshStatus`
+- `RefreshProxies`
 - `StartStream(Traffic)`
 - `StartStream(Memory)`
 
@@ -746,6 +746,9 @@ Tab 顺序由 `TabId::ORDER` 决定：
 - `CoreStatus`
 - `Version`
 - `ConfigLoaded`
+- `ProxiesLoaded`
+- `DelayResult`
+- `GroupDelayResult`
 - `WsTraffic`
 - `WsMemory`
 - `WsConnected` / `WsDisconnected`
@@ -869,26 +872,19 @@ Tab 顺序由 `TabId::ORDER` 决定：
 
 - `paused` 当前只影响 UI 状态和提示，不阻止新日志进入环。
 
-### 14.6 Traffic
+Status 同时展示：
 
-文件：`tabs/traffic.rs`
-
-焦点行为：
-
-- `StartStream(Traffic)`
-- `StartStream(Memory)`
-
-展示：
-
-- 上行速率 sparkline。
-- 下行速率 sparkline。
+- 当前配置。
+- 当前代理组。
+- 当前节点名称。
+- 当前节点类型。
+- 当前节点延迟。
+- 上行 / 下行速率与 sparkline。
 - 当前内存。
 
-历史点：
+流量历史点：`TRAFFIC_HISTORY = 120`
 
-- `HISTORY = 120`
-
-### 14.7 Settings
+### 14.6 Settings
 
 文件：`tabs/settings.rs`
 
@@ -1085,7 +1081,7 @@ strip = true
 已实现：
 
 - TUI 主循环、tab、路由、组件模型。
-- Status/Proxies/Profiles/Connections/Logs/Traffic/Settings。
+- Status/Proxies/Profiles/Connections/Logs/Settings。
 - mihomo HTTP API 基础操作。
 - 四路 WebSocket 流。
 - profile 添加/切换/删除/更新。

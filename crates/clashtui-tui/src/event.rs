@@ -18,19 +18,17 @@ pub enum TabId {
     Profiles,
     Connections,
     Logs,
-    Traffic,
     Settings,
 }
 
 impl TabId {
-    /// tab 栏从左到右的顺序，也用于数字键 1-7 直跳。
-    pub const ORDER: [TabId; 7] = [
+    /// tab 栏从左到右的顺序，也用于数字键 1-6 直跳。
+    pub const ORDER: [TabId; 6] = [
         TabId::Status,
         TabId::Proxies,
         TabId::Profiles,
         TabId::Connections,
         TabId::Logs,
-        TabId::Traffic,
         TabId::Settings,
     ];
 
@@ -42,7 +40,6 @@ impl TabId {
             TabId::Profiles => "Profiles",
             TabId::Connections => "Connections",
             TabId::Logs => "Logs",
-            TabId::Traffic => "Traffic",
             TabId::Settings => "Settings",
         }
     }
@@ -52,7 +49,7 @@ impl TabId {
         TabId::ORDER.iter().position(|&t| t == self).unwrap_or(0)
     }
 
-    /// 由下标取 tab（用于数字键 1-7）。越界返回 None。
+    /// 由下标取 tab（用于数字键 1-6）。越界返回 None。
     pub fn from_index(i: usize) -> Option<TabId> {
         TabId::ORDER.get(i).copied()
     }

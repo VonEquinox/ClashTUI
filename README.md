@@ -11,8 +11,8 @@
 - **代理组与节点**：TwoPane 组/节点浏览、选节点（Selector）、单节点 / 整组测速。
 - **系统代理**：service 级（macOS `networksetup` + 活跃服务探测 / Linux `gsettings`）
   与 env 级（`eval $(clashtui sysproxy env)`）两维度。
-- **实时面板**：日志（`/logs`）、连接监控（`/connections`，关单条/全部）、流量曲线
-  （`/traffic` + `/memory`）。
+- **实时面板**：Status 显示当前节点、流量曲线和内存；Logs 显示 `/logs`；Connections 显示
+  `/connections` 并支持关单条/全部连接。
 - **模式 / TUN**：Rule / Global / Direct 切换、TUN 开关（含提权警告）。
 - **配置分层**：原始订阅 → mixin（prepend/append/override-by-name + 深合并）→ override →
   强制注入 external-controller，生成运行时配置并 reload。`$EDITOR` 编辑 mixin。
