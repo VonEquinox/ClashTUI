@@ -1,14 +1,16 @@
 //! Status tab：版本、内核状态、模式、端口、TUN、实时流量/内存。
 
+use std::collections::{HashMap, VecDeque};
+
 use crossterm::event::KeyEvent;
 use ratatui::{
     buffer::Buffer,
-    layout::Rect,
+    layout::{Constraint, Direction, Layout, Rect},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Widget, Wrap},
+    widgets::{Block, Borders, Paragraph, Sparkline, Widget, Wrap},
 };
 
-use clashtui_core_api::{GeneralConfig, Memory, Mode, Traffic, Version};
+use clashtui_core_api::{GeneralConfig, Memory, Mode, Proxy, Traffic, Version};
 use clashtui_domain::{AppConfig, CoreStatus};
 
 use crate::{
@@ -18,6 +20,8 @@ use crate::{
     widgets::human_bytes,
 };
 
+const TRAFFIC_HISTORY: usize = 120;
+
 /// Status tab 视图状态。
 pub struct StatusTab {
     theme: Theme,
@@ -26,8 +30,14 @@ pub struct StatusTab {
     config: Option<GeneralConfig>,
     app_config: AppConfig,
     traffic: Traffic,
+    traffic_up: VecDeque<u64>,
+    traffic_down: VecDeque<u64>,
     memory: Memory,
     current_profile: Option<String>,
+    current_group: Option<String>,
+    current_node: Option<String>,
+    current_node_kind: Option<String>,
+    current_node_delay: Option<clashtui_core_api::Delay>,
     stream_note: String,
 }
 
@@ -40,8 +50,14 @@ impl StatusTab {
             config: None,
             app_config: AppConfig::default(),
             traffic: Traffic::default(),
+            traffic_up: VecDeque::from(vec![0; TRAFFIC_HISTORY]),
+            traffic_down: VecDeque::from(vec![0; TRAFFIC_HISTORY]),
             memory: Memory::default(),
             current_profile: None,
+            current_group: None,
+            current_node: None,
+            current_node_kind: None,
+            current_node_delay: None,
             stream_note: String::new(),
         }
     }
@@ -52,6 +68,32 @@ impl StatusTab {
             .and_then(|c| c.mode)
             .map(Mode::as_str)
             .unwrap_or("-")
+    }
+
+    fn push_traffic(&mut self, traffic: Traffic) {
+        self.traffic = traffic;
+        if self.traffic_up.len() >= TRAFFIC_HISTORY {
+            self.traffic_up.pop_front();
+            self.traffic_down.pop_front();
+        }
+        self.traffic_up.push_back(traffic.up);
+        self.traffic_down.push_back(traffic.down);
+    }
+
+    fn apply_proxies(&mut self, groups: &[Proxy], all: &HashMap<String, Proxy>) {
+        let group = preferred_group(groups);
+        self.current_group = group.map(|group| group.name.clone());
+        self.current_node = group.and_then(|group| group.now.clone());
+        self.current_node_kind = self
+            .current_node
+            .as_deref()
+            .and_then(|node| all.get(node))
+            .map(|proxy| proxy.kind.clone());
+        self.current_node_delay = self
+            .current_node
+            .as_deref()
+            .and_then(|node| all.get(node))
+            .map(|proxy| proxy.latest_delay());
     }
 }
 
@@ -74,6 +116,7 @@ impl Component for StatusTab {
         // 进入 Status 即刷新状态，并起 traffic/memory 流。
         vec![
             Effect::RefreshStatus,
+            Effect::RefreshProxies,
             Effect::StartStream(crate::event::StreamId::Traffic),
             Effect::StartStream(crate::event::StreamId::Memory),
         ]
@@ -85,7 +128,16 @@ impl Component for StatusTab {
             AppEvent::Version(v) => self.version = v.clone(),
             AppEvent::ConfigLoaded(c) => self.config = Some((**c).clone()),
             AppEvent::AppConfigLoaded(c) => self.app_config = (**c).clone(),
-            AppEvent::WsTraffic(t) => self.traffic = *t,
+            AppEvent::ProxiesLoaded { groups, all } => self.apply_proxies(groups, all),
+            AppEvent::DelayResult { node, delay } if self.current_node.as_deref() == Some(node) => {
+                self.current_node_delay = Some(*delay);
+            }
+            AppEvent::GroupDelayResult(map) => {
+                if let Some(delay) = self.current_node.as_deref().and_then(|node| map.get(node)) {
+                    self.current_node_delay = Some(clashtui_core_api::Delay(*delay));
+                }
+            }
+            AppEvent::WsTraffic(t) => self.push_traffic(*t),
             AppEvent::WsMemory(m) => self.memory = *m,
             AppEvent::WsConnected(k) => self.stream_note = format!("{k} 已连接"),
             AppEvent::WsDisconnected(k) => self.stream_note = format!("{k} 重连中…"),
@@ -143,6 +195,21 @@ impl Component for StatusTab {
             .map(|c| if c.tun.enable { "on" } else { "off" })
             .unwrap_or("-");
 
+        let node = self.current_node.as_deref().unwrap_or("-");
+        let node_detail = match (
+            self.current_group.as_deref(),
+            self.current_node_kind.as_deref(),
+            self.current_node_delay,
+        ) {
+            (Some(group), Some(kind), Some(delay)) => {
+                format!("{node} ({kind}, {group}, {})", delay.display())
+            }
+            (Some(group), Some(kind), None) => format!("{node} ({kind}, {group})"),
+            (Some(group), None, Some(delay)) => format!("{node} ({group}, {})", delay.display()),
+            (Some(group), None, None) => format!("{node} ({group})"),
+            _ => node.to_string(),
+        };
+
         let rows = vec![
             row(&self.theme, "内核", &self.status.label(), status_style),
             row(&self.theme, "版本", &ver, self.theme.fg_style()),
@@ -155,6 +222,7 @@ impl Component for StatusTab {
                 self.current_profile.as_deref().unwrap_or("-"),
                 self.theme.fg_style(),
             ),
+            row(&self.theme, "当前节点", &node_detail, self.theme.fg_style()),
             row(
                 &self.theme,
                 "流量",
@@ -181,13 +249,67 @@ impl Component for StatusTab {
             )));
         }
 
-        let para = Paragraph::new(lines).wrap(Wrap { trim: false });
-        para.render(inner, buf);
+        let sections = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(lines.len() as u16),
+                Constraint::Min(3),
+                Constraint::Min(3),
+            ])
+            .split(inner);
+
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .render(sections[0], buf);
+
+        let up: Vec<u64> = self.traffic_up.iter().copied().collect();
+        let down: Vec<u64> = self.traffic_down.iter().copied().collect();
+        Sparkline::default()
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(self.theme.border_style(focused))
+                    .title(Span::styled(" 上行 ↑ ", self.theme.ok_style())),
+            )
+            .data(&up)
+            .style(self.theme.ok_style())
+            .render(sections[1], buf);
+        Sparkline::default()
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(self.theme.border_style(focused))
+                    .title(Span::styled(" 下行 ↓ ", self.theme.accent_style())),
+            )
+            .data(&down)
+            .style(self.theme.accent_style())
+            .render(sections[2], buf);
     }
 
     fn footer_hints(&self) -> &str {
         "s 启动 · S 停止 · R 重启内核 · Ctrl+R 重启"
     }
+}
+
+fn preferred_group(groups: &[Proxy]) -> Option<&Proxy> {
+    const PREFERRED_NAMES: [&str; 7] = [
+        "GLOBAL",
+        "Global",
+        "PROXY",
+        "Proxy",
+        "代理",
+        "节点选择",
+        "🚀 节点选择",
+    ];
+    for name in PREFERRED_NAMES {
+        if let Some(group) = groups
+            .iter()
+            .find(|group| group.name == name && group.now.is_some())
+        {
+            return Some(group);
+        }
+    }
+    groups.iter().find(|group| group.now.is_some())
 }
 
 fn row(
@@ -200,4 +322,63 @@ fn row(
         Span::styled(format!("  {label:<10}"), theme.tab_inactive()),
         Span::styled(value.to_string(), value_style),
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clashtui_core_api::DelayHistory;
+
+    fn group(name: &str, now: Option<&str>) -> Proxy {
+        Proxy {
+            name: name.to_string(),
+            kind: "Selector".to_string(),
+            all: vec![],
+            now: now.map(str::to_string),
+            history: Vec::new(),
+            udp: false,
+            test_url: None,
+            expected_status: None,
+        }
+    }
+
+    fn node(name: &str) -> Proxy {
+        Proxy {
+            name: name.to_string(),
+            kind: "Shadowsocks".to_string(),
+            all: vec![],
+            now: None,
+            history: vec![DelayHistory {
+                time: "t".to_string(),
+                delay: 123,
+            }],
+            udp: true,
+            test_url: None,
+            expected_status: None,
+        }
+    }
+
+    #[test]
+    fn preferred_group_uses_global_when_available() {
+        let groups = vec![group("节点选择", Some("A")), group("GLOBAL", Some("B"))];
+        assert_eq!(
+            preferred_group(&groups).map(|group| group.name.as_str()),
+            Some("GLOBAL")
+        );
+    }
+
+    #[test]
+    fn status_extracts_current_node_from_proxies() {
+        let mut tab = StatusTab::new(Theme::default());
+        let groups = vec![group("GLOBAL", Some("Node A"))];
+        let mut all = HashMap::new();
+        all.insert("Node A".to_string(), node("Node A"));
+
+        tab.apply_proxies(&groups, &all);
+
+        assert_eq!(tab.current_group.as_deref(), Some("GLOBAL"));
+        assert_eq!(tab.current_node.as_deref(), Some("Node A"));
+        assert_eq!(tab.current_node_kind.as_deref(), Some("Shadowsocks"));
+        assert_eq!(tab.current_node_delay.map(|delay| delay.0), Some(123));
+    }
 }
