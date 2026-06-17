@@ -21,14 +21,36 @@ pub async fn download(url: &str) -> DomainResult<DownloadResult> {
     download_with_progress(url, |_, _| {}).await
 }
 
+/// 通过 HTTP 代理下载一个订阅 URL。
+pub async fn download_via_proxy(url: &str, proxy: &str) -> DomainResult<DownloadResult> {
+    download_with_proxy_and_progress(url, Some(proxy), |_, _| {}).await
+}
+
 /// 下载一个订阅 URL，下载期间回调 `(downloaded, total)`。
-pub async fn download_with_progress<F>(url: &str, mut progress: F) -> DomainResult<DownloadResult>
+pub async fn download_with_progress<F>(url: &str, progress: F) -> DomainResult<DownloadResult>
 where
     F: FnMut(u64, Option<u64>) + Send,
 {
-    let client = reqwest::Client::builder()
+    download_with_proxy_and_progress(url, None, progress).await
+}
+
+/// 下载一个订阅 URL，可选通过 HTTP 代理，下载期间回调 `(downloaded, total)`。
+pub async fn download_with_proxy_and_progress<F>(
+    url: &str,
+    proxy: Option<&str>,
+    mut progress: F,
+) -> DomainResult<DownloadResult>
+where
+    F: FnMut(u64, Option<u64>) + Send,
+{
+    let mut builder = reqwest::Client::builder()
         .user_agent("clash.meta")
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(30));
+    if let Some(proxy) = proxy {
+        builder = builder
+            .proxy(reqwest::Proxy::all(proxy).map_err(|e| DomainError::Http(e.to_string()))?);
+    }
+    let client = builder
         .build()
         .map_err(|e| DomainError::Http(e.to_string()))?;
 

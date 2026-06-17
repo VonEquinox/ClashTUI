@@ -164,6 +164,10 @@ pub fn apply(app: &mut App, effect: Effect) -> bool {
             spawn_update_profile(app.ctx(), name);
             false
         }
+        Effect::UpdateProfileViaProxy(name) => {
+            spawn_update_profile_via_proxy(app.ctx(), name);
+            false
+        }
         Effect::UpdateAllProfiles => {
             spawn_update_all(app.ctx());
             false
@@ -966,7 +970,19 @@ fn spawn_delete_profile(ctx: AppContext, name: String) {
 fn spawn_update_profile(ctx: AppContext, name: String) {
     tokio::spawn(async move {
         let task_key = format!("update_profile:{name}");
-        update_one(&ctx, &name, None).await;
+        update_one(&ctx, &name, None, None).await;
+        let list = ctx.profiles.lock().await.list();
+        ctx.emit(AppEvent::ProfilesChanged(list));
+        finish_task(&ctx, &task_key);
+    });
+}
+
+fn spawn_update_profile_via_proxy(ctx: AppContext, name: String) {
+    tokio::spawn(async move {
+        let task_key = format!("update_profile_via_proxy:{name}");
+        let proxy = subscription_update_proxy(&ctx);
+        ctx.emit(AppEvent::Toast(format!("通过代理更新订阅: {name}")));
+        update_one(&ctx, &name, None, Some(proxy)).await;
         let list = ctx.profiles.lock().await.list();
         ctx.emit(AppEvent::ProfilesChanged(list));
         finish_task(&ctx, &task_key);
@@ -1008,6 +1024,7 @@ fn spawn_update_all(ctx: AppContext) {
                     total,
                     index: idx as u64,
                 }),
+                None,
             )
             .await;
             emit_progress(
@@ -1034,7 +1051,12 @@ struct BatchProgress {
 }
 
 /// 更新单个订阅（仅 URL 类型重新下载）。
-async fn update_one(ctx: &AppContext, name: &str, batch: Option<BatchProgress>) {
+async fn update_one(
+    ctx: &AppContext,
+    name: &str,
+    batch: Option<BatchProgress>,
+    proxy: Option<String>,
+) {
     use clashtui_domain::profile::{download, ProfileKind, ProfileMeta};
     let meta = ctx.profiles.lock().await.get(name).cloned();
     let Some(meta) = meta else { return };
@@ -1045,19 +1067,22 @@ async fn update_one(ctx: &AppContext, name: &str, batch: Option<BatchProgress>) 
     let progress_ctx = ctx.clone();
     let progress_id_for_download = progress_id.clone();
     let label = format!("更新订阅 {name}");
-    match download::download_with_progress(&meta.url, move |done, total| {
-        if batch.is_none() {
-            emit_progress(
-                &progress_ctx,
-                &progress_id_for_download,
-                label.clone(),
-                done,
-                total,
-            );
-        }
-    })
-    .await
-    {
+    let download = download::download_with_proxy_and_progress(
+        &meta.url,
+        proxy.as_deref(),
+        move |done, total| {
+            if batch.is_none() {
+                emit_progress(
+                    &progress_ctx,
+                    &progress_id_for_download,
+                    label.clone(),
+                    done,
+                    total,
+                );
+            }
+        },
+    );
+    match download.await {
         Ok(res) => {
             if batch.is_none() {
                 finish_progress(ctx, &progress_id);
@@ -1096,6 +1121,16 @@ async fn update_one(ctx: &AppContext, name: &str, batch: Option<BatchProgress>) 
             ctx.emit(AppEvent::Error(format!("{name} 更新失败: {e}")));
         }
     }
+}
+
+fn subscription_update_proxy(ctx: &AppContext) -> String {
+    let config = load_config_snapshot(ctx);
+    let port = if config.system_proxy.mixed_port > 0 {
+        config.system_proxy.mixed_port
+    } else {
+        config.system_proxy.http_port
+    };
+    format!("http://127.0.0.1:{port}")
 }
 
 /// 由当前 profile 生成运行时配置并 reload 内核。

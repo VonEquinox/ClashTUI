@@ -237,6 +237,8 @@ pub enum Effect {
     DeleteProfile(String),
     /// 更新一个订阅。
     UpdateProfile(String),
+    /// 使用本机代理更新一个订阅。
+    UpdateProfileViaProxy(String),
     /// 更新全部订阅。
     UpdateAllProfiles,
 
@@ -290,6 +292,7 @@ impl Effect {
             Effect::SwitchProfile(name) => Some(format!("switch_profile:{name}")),
             Effect::DeleteProfile(name) => Some(format!("delete_profile:{name}")),
             Effect::UpdateProfile(name) => Some(format!("update_profile:{name}")),
+            Effect::UpdateProfileViaProxy(name) => Some(format!("update_profile_via_proxy:{name}")),
             Effect::UpdateAllProfiles => Some("update_all_profiles".into()),
             Effect::ToggleSysProxy => Some("toggle_sysproxy".into()),
             Effect::CloseConn(id) => Some(format!("close_conn:{id}")),

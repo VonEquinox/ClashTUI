@@ -180,6 +180,10 @@ impl Component for ProfilesTab {
                 Some(n) => (Handled::Yes, vec![Effect::UpdateProfile(n)]),
                 None => (Handled::Yes, vec![]),
             },
+            KeyCode::Char('P') => match self.selected_name() {
+                Some(n) => (Handled::Yes, vec![Effect::UpdateProfileViaProxy(n)]),
+                None => (Handled::Yes, vec![]),
+            },
             KeyCode::Char('U') => (Handled::Yes, vec![Effect::UpdateAllProfiles]),
             _ => (Handled::No, vec![]),
         }
@@ -284,7 +288,7 @@ impl Component for ProfilesTab {
                 if self.confirm.open {
                     "y 确认删除 · n/Esc 取消"
                 } else {
-                    "↑/↓ 选择 · Enter 切换 · a 添加 · d 删除 · u 更新 · U 全部更新"
+                    "↑/↓ 选择 · Enter 切换 · a 添加 · d 删除 · u 更新 · P 代理更新 · U 全部更新"
                 }
             }
         }

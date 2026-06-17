@@ -8,7 +8,7 @@
 //! WS 流由 [`StreamHub`] 扇入单独通道，再由转发任务回灌 [`AppEvent`] 总线。
 
 use std::collections::HashSet;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use clashtui_core_api::{StreamHub, StreamKind};
 use ratatui::{
@@ -36,7 +36,7 @@ pub struct App {
     active: usize,
     pub help_open: bool,
     pub should_quit: bool,
-    toast: Option<String>,
+    toast: Option<ToastState>,
     progress: Option<ProgressUpdate>,
     inflight_effects: HashSet<String>,
     /// 已启动的 WS 流类型集合（去重）。
@@ -48,6 +48,13 @@ pub struct App {
     /// 待执行的 $EDITOR 编辑 mixin 请求（由主循环消费）。
     pending_edit_mixin: bool,
 }
+
+struct ToastState {
+    message: String,
+    expires_at: Instant,
+}
+
+const TOAST_TTL: Duration = Duration::from_secs(3);
 
 impl App {
     /// 用上下文构造。`stream_tx` 是 StreamHub 扇入端，对应的 rx 在 run 里转发。
@@ -99,12 +106,33 @@ impl App {
         let blur = self.tabs[self.active].on_blur();
         self.active = new;
         let focus = self.tabs[self.active].on_focus();
+        self.clear_toast();
         self.apply_effects(blur);
         self.apply_effects(focus);
     }
 
     pub fn set_toast(&mut self, msg: String) {
-        self.toast = Some(msg);
+        self.toast = Some(ToastState {
+            message: msg,
+            expires_at: Instant::now() + TOAST_TTL,
+        });
+    }
+
+    fn clear_toast(&mut self) {
+        self.toast = None;
+    }
+
+    fn expire_toast(&mut self) -> bool {
+        if self
+            .toast
+            .as_ref()
+            .is_some_and(|toast| Instant::now() >= toast.expires_at)
+        {
+            self.toast = None;
+            true
+        } else {
+            false
+        }
     }
 
     fn apply_effects(&mut self, effects: impl IntoIterator<Item = Effect>) -> bool {
@@ -195,6 +223,7 @@ impl App {
                     }
                 }
                 _ = tick.tick() => {
+                    need_redraw |= self.expire_toast();
                     if self.tabs[self.active].tick() {
                         need_redraw = true;
                     }
@@ -410,7 +439,7 @@ impl App {
         let hints = self.tabs[self.active].footer_hints();
         let left = match (&self.progress, &self.toast) {
             (Some(p), _) => format!(" {} ", format_progress(p, area.width as usize)),
-            (None, Some(t)) => format!(" {t} "),
+            (None, Some(t)) => format!(" {} ", t.message),
             (None, None) => format!(" {hints} "),
         };
         let right = " Tab/←→ 切换 · ? 帮助 · q 退出 ";
