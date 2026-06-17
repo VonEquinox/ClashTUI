@@ -1,6 +1,7 @@
 //! ClashTUI 入口：解析 CLI，分派到子命令或启动 TUI。
 
 mod cli;
+mod embedded_core;
 
 use clap::Parser;
 use cli::{Cli, Command};
@@ -28,8 +29,16 @@ async fn main() -> color_eyre::Result<()> {
             eprintln!("子命令 {other:?} 尚未实现（计划于后续里程碑）。");
             Ok(())
         }
-        // 无子命令 → 启动 TUI。
-        None => clashtui_tui::run().await,
+        // 无子命令 → 安装内嵌默认内核后启动 TUI。
+        None => {
+            let paths = clashtui_domain::Paths::resolve();
+            paths.ensure_dirs()?;
+            let config = clashtui_domain::AppConfig::load(&paths.config_file())?;
+            if config.mihomo_binary.is_empty() {
+                embedded_core::install_default_if_missing(&paths)?;
+            }
+            clashtui_tui::run().await
+        }
     }
 }
 

@@ -53,8 +53,28 @@ jobs:
       - name: Test
         run: cargo test --workspace --locked
 
+      - name: Download mihomo for embedding
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          case "${{ matrix.target }}" in
+            aarch64-apple-darwin) infix="darwin-arm64" ;;
+            x86_64-unknown-linux-gnu) infix="linux-amd64" ;;
+            *) echo "unsupported target ${{ matrix.target }}" >&2; exit 1 ;;
+          esac
+          tag="$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" https://api.github.com/repos/MetaCubeX/mihomo/releases/latest | ruby -rjson -e 'puts JSON.parse(STDIN.read).fetch("tag_name")')"
+          asset="mihomo-${infix}-${tag}.gz"
+          url="https://github.com/MetaCubeX/mihomo/releases/download/${tag}/${asset}"
+          mkdir -p embedded
+          curl -fL "$url" | gunzip > embedded/mihomo
+          chmod +x embedded/mihomo
+
       - name: Build
         run: cargo build --release --locked --target ${{ matrix.target }} --bin clashtui
+        env:
+          CLASHTUI_EMBED_MIHOMO_PATH: ${{ github.workspace }}/embedded/mihomo
 
       - name: Package
         shell: bash
@@ -94,7 +114,19 @@ jobs:
           sudo apt-get install -y --no-install-recommends musl-tools
 
       - name: Build Ubuntu 20.04 compatible binary
-        run: cargo build --release --locked --target x86_64-unknown-linux-musl --bin clashtui
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" https://api.github.com/repos/MetaCubeX/mihomo/releases/latest | ruby -rjson -e 'puts JSON.parse(STDIN.read).fetch("tag_name")')"
+          asset="mihomo-linux-amd64-${tag}.gz"
+          url="https://github.com/MetaCubeX/mihomo/releases/download/${tag}/${asset}"
+          mkdir -p embedded
+          curl -fL "$url" | gunzip > embedded/mihomo
+          chmod +x embedded/mihomo
+          CLASHTUI_EMBED_MIHOMO_PATH="$PWD/embedded/mihomo" \
+            cargo build --release --locked --target x86_64-unknown-linux-musl --bin clashtui
 
       - name: Package Ubuntu 20.04 artifact
         shell: bash

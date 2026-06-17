@@ -332,6 +332,7 @@ dependencies = [
  "clashtui-domain",
  "clashtui-tui",
  "color-eyre",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",

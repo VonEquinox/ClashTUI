@@ -12,6 +12,7 @@ fn main() {
         None => pkg,
     };
     println!("cargo:rustc-env=CLASHTUI_VERSION={version}");
+    configure_embedded_mihomo();
 
     // git HEAD 变化时重跑（若在 git 仓库内）。
     if let Some(git_dir) = find_git_dir() {
@@ -52,4 +53,27 @@ fn run(args: &[&str]) -> Option<String> {
 fn find_git_dir() -> Option<std::path::PathBuf> {
     let out = run(&["rev-parse", "--git-dir"])?;
     Some(std::path::PathBuf::from(out))
+}
+
+fn configure_embedded_mihomo() {
+    println!("cargo:rerun-if-env-changed=CLASHTUI_EMBED_MIHOMO_PATH");
+
+    if let Ok(path) = std::env::var("CLASHTUI_EMBED_MIHOMO_PATH") {
+        let path = std::path::PathBuf::from(path);
+        if path.is_file() {
+            println!(
+                "cargo:rustc-env=CLASHTUI_EMBEDDED_MIHOMO_PATH={}",
+                path.display()
+            );
+            return;
+        }
+    }
+
+    let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR is set by Cargo");
+    let empty = std::path::PathBuf::from(out_dir).join("empty-mihomo");
+    let _ = std::fs::write(&empty, []);
+    println!(
+        "cargo:rustc-env=CLASHTUI_EMBEDDED_MIHOMO_PATH={}",
+        empty.display()
+    );
 }
