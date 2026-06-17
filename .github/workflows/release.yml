@@ -163,11 +163,20 @@ jobs:
       - name: Publish Release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
+          mapfile -t assets < <(find dist -maxdepth 1 -type f -name '*.tar.gz' | sort)
+          if [ "${#assets[@]}" -eq 0 ]; then
+            echo "No release assets found in dist" >&2
+            find dist -maxdepth 2 -type f -print >&2 || true
+            exit 1
+          fi
+
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/*.tar.gz --clobber
+            gh release upload "$TAG" "${assets[@]}" --clobber
           else
-            gh release create "$TAG" dist/*.tar.gz --title "$TAG" --notes "ClashTUI $TAG"
+            gh release create "$TAG" --verify-tag --title "$TAG" --notes "ClashTUI $TAG"
+            gh release upload "$TAG" "${assets[@]}" --clobber
           fi
